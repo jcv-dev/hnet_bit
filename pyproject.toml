@@ -45,7 +45,18 @@ dev = [
 slm-generate = "generate:main"
 
 [tool.setuptools]
-packages = ["simplified_slm"]
+packages = [
+    "simplified_slm",
+    "simplified_slm.models",
+    "simplified_slm.layers",
+    "simplified_slm.ops",
+    "simplified_slm.ops.hgrn",
+    "simplified_slm.training",
+    "simplified_slm.utils",
+    "simplified_slm.scripts",
+    "simplified_slm.configs",
+    "simplified_slm.tests",
+]
 package-dir = {"simplified_slm" = "."}
 
 [tool.pytest.ini_options]
