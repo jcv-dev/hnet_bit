@@ -24,43 +24,57 @@ from .data import ByteLevelDataset
 
 @dataclass
 class DatasetConfig:
-    """Configuration for dataset loading and preprocessing."""
-    
+    """Configuration for dataset loading and preprocessing.
+
+    Works with any HuggingFace text dataset.  The text column is
+    resolved automatically when *text_column* is ``"auto"``.
+    For datasets with multiple relevant columns (e.g. instruction +
+    output) set *text_columns* to a list and optionally provide a
+    *separator* to join them.
+    """
+
     # Dataset source
     dataset_name: str = "roneneldan/TinyStories"
     dataset_config: Optional[str] = None
     split: str = "train"
-    
-    # Text column
-    text_column: str = "text"
-    
+
+    # Text columns -------------------------------------------------------
+    # Single column: set text_column (str).  "auto" = detect automatically.
+    # Multiple columns: set text_columns (list[str]).  They are joined with
+    #   *separator* in order.
+    text_column: str = "auto"
+    text_columns: Optional[List[str]] = None
+    separator: str = "\n\n"
+
     # Preprocessing
     max_seq_length: int = 512
     stride: Optional[int] = None  # Defaults to max_seq_length (no overlap)
-    
+
     # Filtering
     min_length: int = 10  # Minimum text length in bytes
     max_length: Optional[int] = None  # Maximum text length in bytes
-    
+
     # Caching
     cache_dir: str = "./data/cache"
     use_cache: bool = True
-    
+
     # Subset for testing
     max_samples: Optional[int] = None  # Limit total samples (for debugging)
-    
+
     # Streaming (for large datasets)
     streaming: bool = False
-    
+
     # Seed for reproducibility
     seed: int = 42
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "dataset_name": self.dataset_name,
             "dataset_config": self.dataset_config,
             "split": self.split,
             "text_column": self.text_column,
+            "text_columns": self.text_columns,
+            "separator": self.separator,
             "max_seq_length": self.max_seq_length,
             "stride": self.stride,
             "min_length": self.min_length,
@@ -69,7 +83,7 @@ class DatasetConfig:
             "streaming": self.streaming,
             "seed": self.seed,
         }
-    
+
     def cache_key(self) -> str:
         """Generate a unique cache key for this configuration."""
         config_str = json.dumps(self.to_dict(), sort_keys=True)
@@ -192,6 +206,10 @@ class HuggingFaceDataset(Dataset):
         if self.config.max_samples and not self.config.streaming:
             dataset = dataset.select(range(min(self.config.max_samples, len(dataset))))
         
+        # Resolve text column(s)
+        text_columns = self._resolve_text_columns(dataset)
+        print(f"Using text column(s): {text_columns}")
+        
         # Convert to bytes
         all_bytes = []
         sample_lengths = []
@@ -201,7 +219,7 @@ class HuggingFaceDataset(Dataset):
             if self.config.max_samples and i >= self.config.max_samples:
                 break
                 
-            text = example[self.config.text_column]
+            text = self._extract_text(example, text_columns)
             if text is None:
                 continue
                 
@@ -233,7 +251,94 @@ class HuggingFaceDataset(Dataset):
         print(f"Dataset loaded: {self._stats.num_samples} samples, {self._stats.total_bytes:,} bytes")
         
         self._create_inner_dataset()
-    
+
+    # ------------------------------------------------------------------
+    # Text column resolution
+    # ------------------------------------------------------------------
+
+    # Common text column names across popular HF datasets
+    _KNOWN_TEXT_COLUMNS = [
+        "text", "content", "story", "document", "passage",
+        "sentence", "paragraph", "article", "body",
+    ]
+    # Common instruction / chat column pairs
+    _KNOWN_MULTI_COLUMNS = [
+        ["instruction", "output"],
+        ["instruction", "response"],
+        ["prompt", "completion"],
+        ["prompt", "response"],
+        ["input", "output"],
+        ["question", "answer"],
+        ["context", "response"],
+        ["human", "assistant"],
+    ]
+
+    def _resolve_text_columns(self, dataset) -> List[str]:
+        """Determine which column(s) contain the text.
+
+        Priority:
+        1. Explicit ``text_columns`` list in config.
+        2. Explicit ``text_column`` (not "auto") in config.
+        3. Auto-detect from dataset column names.
+        """
+        if self.config.text_columns:
+            return list(self.config.text_columns)
+
+        if self.config.text_column != "auto":
+            return [self.config.text_column]
+
+        # Auto-detect
+        try:
+            columns = set(dataset.column_names)
+        except AttributeError:
+            # Streaming / iterable datasets – peek at first example
+            first = next(iter(dataset))
+            columns = set(first.keys())
+
+        # Check single-column names first
+        for col in self._KNOWN_TEXT_COLUMNS:
+            if col in columns:
+                return [col]
+
+        # Check multi-column pairs
+        for pair in self._KNOWN_MULTI_COLUMNS:
+            if all(c in columns for c in pair):
+                return list(pair)
+
+        # Fallback: pick the first string-valued column
+        try:
+            first = next(iter(dataset))
+        except StopIteration:
+            raise ValueError("Dataset is empty – cannot auto-detect text column.")
+        for col in first:
+            if isinstance(first[col], str):
+                print(f"  Auto-detected text column: '{col}'")
+                return [col]
+
+        raise ValueError(
+            f"Could not auto-detect a text column.  Available columns: "
+            f"{sorted(columns)}.  Set text_column or text_columns explicitly."
+        )
+
+    def _extract_text(self, example: dict, text_columns: List[str]) -> Optional[str]:
+        """Extract and join text from one or more columns."""
+        parts = []
+        for col in text_columns:
+            val = example.get(col)
+            if val is None:
+                continue
+            if isinstance(val, list):
+                # e.g. conversation turns stored as a list of dicts
+                val = self.config.separator.join(
+                    turn.get("content", turn.get("value", str(turn)))
+                    if isinstance(turn, dict) else str(turn)
+                    for turn in val
+                )
+            parts.append(str(val))
+        if not parts:
+            return None
+        return self.config.separator.join(parts)
+
     def _create_inner_dataset(self) -> None:
         """Create the inner ByteLevelDataset."""
         self._inner = ByteLevelDataset(

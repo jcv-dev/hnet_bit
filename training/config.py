@@ -66,6 +66,17 @@ class TrainingConfig:
     # Data
     max_seq_length: int = 512
     
+    # HuggingFace dataset (alternative to data_path)
+    dataset: Optional[str] = None  # HF dataset name, e.g. "roneneldan/TinyStories"
+    dataset_config: Optional[str] = None  # HF dataset config/subset
+    text_column: str = "auto"  # "auto" = detect automatically
+    text_columns: Optional[list[str]] = None  # Multiple columns to join
+    separator: str = "\n\n"  # Separator when joining multiple columns
+    streaming: bool = False  # Stream large datasets
+    max_samples: Optional[int] = None  # Limit samples (for debugging)
+    val_split: str = "validation"  # Name of the validation split
+    train_split: str = "train"  # Name of the training split
+    
     # Evaluation & logging
     eval_interval: int = 500
     save_interval: int = 1000

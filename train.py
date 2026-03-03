@@ -30,6 +30,7 @@ import torch
 
 from simplified_slm.training.config import TrainingConfig
 from simplified_slm.training.data import ByteLevelDataset, TextFileDataset, create_synthetic_data
+from simplified_slm.training.dataset_loader import DatasetConfig, HuggingFaceDataset
 from simplified_slm.training.trainer import Trainer
 from simplified_slm.training.logger import TrainingLogger
 
@@ -67,8 +68,56 @@ def build_model(model_type: str, model_config_path: str | None, device: torch.de
 
 
 def build_datasets(config: TrainingConfig, max_seq_length: int):
-    """Build training and optional validation dataset."""
+    """Build training and optional validation dataset.
 
+    Supports three data sources (checked in order):
+      1. ``config.dataset`` — any HuggingFace dataset
+      2. ``config.data_path`` — a local text file
+      3. Synthetic data (fallback for quick testing)
+    """
+
+    # -----------------------------------------------------------------
+    # 1. HuggingFace dataset
+    # -----------------------------------------------------------------
+    if config.dataset:
+        print(f"Loading HuggingFace dataset: {config.dataset}")
+
+        def _make_ds(split: str) -> HuggingFaceDataset:
+            ds_cfg = DatasetConfig(
+                dataset_name=config.dataset,
+                dataset_config=config.dataset_config,
+                split=split,
+                text_column=config.text_column,
+                text_columns=config.text_columns,
+                separator=config.separator,
+                max_seq_length=max_seq_length,
+                max_samples=config.max_samples,
+                streaming=config.streaming,
+                seed=config.seed,
+            )
+            return HuggingFaceDataset(ds_cfg)  # loads automatically
+
+        train_ds = _make_ds(config.train_split)
+
+        try:
+            val_ds = _make_ds(config.val_split)
+        except Exception as exc:
+            # Many datasets don't have a 'validation' split — fall back
+            # to a random subset of the training data.
+            print(f"  No '{config.val_split}' split ({exc}); "
+                  "carving 10% of training data for validation.")
+            n = len(train_ds)
+            n_val = max(1, n // 10)
+            n_train = n - n_val
+            val_ds = torch.utils.data.Subset(train_ds, range(n_train, n))
+            train_ds = torch.utils.data.Subset(train_ds, range(n_train))
+
+        print(f"Train samples: {len(train_ds)}, Val samples: {len(val_ds)}")
+        return train_ds, val_ds
+
+    # -----------------------------------------------------------------
+    # 2. Local text file
+    # -----------------------------------------------------------------
     if config.data_path and os.path.exists(config.data_path):
         print(f"Loading data from {config.data_path}")
         full_ds = TextFileDataset(config.data_path, max_seq_length=max_seq_length)
@@ -80,14 +129,19 @@ def build_datasets(config: TrainingConfig, max_seq_length: int):
         
         train_ds = torch.utils.data.Subset(full_ds, range(n_train))
         val_ds = torch.utils.data.Subset(full_ds, range(n_train, n))
-    else:
-        print("No data_path found — using synthetic data for testing")
-        data = create_synthetic_data(num_bytes=max_seq_length * 500)
-        train_tokens = data[:int(len(data) * 0.9)]
-        val_tokens = data[int(len(data) * 0.9):]
-        
-        train_ds = ByteLevelDataset(train_tokens, max_seq_length=max_seq_length)
-        val_ds = ByteLevelDataset(val_tokens, max_seq_length=max_seq_length)
+        print(f"Train samples: {len(train_ds)}, Val samples: {len(val_ds)}")
+        return train_ds, val_ds
+
+    # -----------------------------------------------------------------
+    # 3. Synthetic fallback
+    # -----------------------------------------------------------------
+    print("No data_path or dataset found — using synthetic data for testing")
+    data = create_synthetic_data(num_bytes=max_seq_length * 500)
+    train_tokens = data[:int(len(data) * 0.9)]
+    val_tokens = data[int(len(data) * 0.9):]
+    
+    train_ds = ByteLevelDataset(train_tokens, max_seq_length=max_seq_length)
+    val_ds = ByteLevelDataset(val_tokens, max_seq_length=max_seq_length)
     
     print(f"Train samples: {len(train_ds)}, Val samples: {len(val_ds)}")
     return train_ds, val_ds
@@ -119,6 +173,24 @@ def main():
     parser.add_argument("--bf16", action="store_true", default=False)
     parser.add_argument("--fp16", action="store_true", default=False)
     
+    # HuggingFace dataset ------------------------------------------------
+    parser.add_argument("--dataset", type=str, default=None,
+                        help="HuggingFace dataset name (e.g. 'roneneldan/TinyStories')")
+    parser.add_argument("--dataset_config", type=str, default=None,
+                        help="HF dataset config / subset name")
+    parser.add_argument("--text_column", type=str, default=None,
+                        help="Text column name (default: auto-detect)")
+    parser.add_argument("--text_columns", type=str, nargs="+", default=None,
+                        help="Multiple text columns to join (e.g. --text_columns instruction output)")
+    parser.add_argument("--streaming", action="store_true", default=False,
+                        help="Stream dataset instead of downloading entirely")
+    parser.add_argument("--max_samples", type=int, default=None,
+                        help="Limit number of dataset samples (for debugging)")
+    parser.add_argument("--train_split", type=str, default=None,
+                        help="Training split name (default: 'train')")
+    parser.add_argument("--val_split", type=str, default=None,
+                        help="Validation split name (default: 'validation')")
+    
     args = parser.parse_args()
     
     # Load or create training config
@@ -129,7 +201,9 @@ def main():
     
     # CLI overrides
     for key in ['output_dir', 'data_path', 'max_steps', 'batch_size',
-                'max_seq_length', 'resume_from', 'seed', 'bf16', 'fp16']:
+                'max_seq_length', 'resume_from', 'seed', 'bf16', 'fp16',
+                'dataset', 'dataset_config', 'text_column', 'text_columns',
+                'streaming', 'max_samples', 'train_split', 'val_split']:
         val = getattr(args, key, None)
         if val is not None:
             setattr(config, key, val)
