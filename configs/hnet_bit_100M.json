@@ -1,8 +1,8 @@
 {
     "model_type": "hnet_bit",
     "vocab_size": 256,
-    "d_model": [768, 1024, 1536],
-    "num_blocks": [[4, 0, 4], [4, 0, 4], [12]],
+    "d_model": [576, 768],
+    "num_blocks": [[4, 0, 4], [10]],
     "num_heads": 1,
     "expand_ratio": 1,
     "hidden_ratio": 4,
