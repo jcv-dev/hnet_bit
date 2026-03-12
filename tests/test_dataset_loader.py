@@ -65,6 +65,8 @@ class TestDatasetStatistics:
         stats = DatasetStatistics.from_data(data)
         
         assert stats.total_bytes == 5
+        # byte_distribution is lazy; trigger computation explicitly
+        stats._compute_byte_distribution()
         assert stats.byte_distribution is not None
         assert stats.byte_distribution[65] == 3  # 'A' appears 3 times
         assert stats.byte_distribution[66] == 1  # 'B' appears 1 time

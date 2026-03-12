@@ -100,6 +100,7 @@ class DatasetStatistics:
     min_bytes: int = 0
     max_bytes: int = 0
     byte_distribution: Optional[Dict[int, int]] = None  # byte value -> count
+    _byte_tensor: Optional[object] = field(default=None, repr=False)  # for lazy computation
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -115,14 +116,20 @@ class DatasetStatistics:
         """Compute statistics from a byte tensor."""
         stats = cls()
         stats.total_bytes = len(byte_tensor)
-        
-        # Compute byte distribution
-        unique, counts = torch.unique(byte_tensor, return_counts=True)
-        stats.byte_distribution = {
+        # Store tensor reference for lazy byte_distribution computation
+        # (torch.unique on a large tensor causes a significant memory spike)
+        stats._byte_tensor = byte_tensor
+        return stats
+
+    def _compute_byte_distribution(self) -> None:
+        """Compute byte distribution on demand."""
+        if self._byte_tensor is None:
+            return
+        unique, counts = torch.unique(self._byte_tensor, return_counts=True)
+        self.byte_distribution = {
             int(u): int(c) for u, c in zip(unique.tolist(), counts.tolist())
         }
-        
-        return stats
+        self._byte_tensor = None  # release reference
 
 
 class HuggingFaceDataset(Dataset):
@@ -608,6 +615,8 @@ def print_dataset_stats(dataset: HuggingFaceDataset) -> None:
     print(f"Training sequences: {len(dataset):,}")
     print(f"Sequence length: {dataset.config.max_seq_length}")
     
+    if stats.byte_distribution is None and stats._byte_tensor is not None:
+        stats._compute_byte_distribution()
     if stats.byte_distribution:
         # Show most common bytes
         sorted_bytes = sorted(
