@@ -151,6 +151,7 @@ def main():
     parser.add_argument("--data_path", type=str, default=None)
     parser.add_argument("--max_steps", type=int, default=None)
     parser.add_argument("--batch_size", type=int, default=None)
+    parser.add_argument("--eval_interval", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--max_seq_length", type=int, default=None)
     parser.add_argument("--resume_from", type=str, default=None)
@@ -188,7 +189,7 @@ def main():
     for key in ['output_dir', 'data_path', 'max_steps', 'batch_size',
                 'max_seq_length', 'resume_from', 'seed', 'bf16', 'fp16',
                 'dataset', 'dataset_config', 'text_column', 'text_columns',
-                'streaming', 'max_samples', 'train_split', 'val_split']:
+                'streaming', 'max_samples', 'train_split', 'val_split', 'eval_interval']:
         val = getattr(args, key, None)
         if val is not None:
             setattr(config, key, val)
